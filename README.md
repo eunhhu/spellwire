@@ -19,6 +19,24 @@ Spellwire is a stateful realtime input-automation runtime for Bun and TypeScript
 - Deterministic inspector/simulator and native dispatch benchmark
 - Watch mode with native hot reload and automatic platform permission setup
 
+## API at a glance
+
+| Task | API |
+| --- | --- |
+| Consuming hotkey | `rt.hotkey("Ctrl+Shift+K", handler)` |
+| Key remap | `rt.remap("CapsLock", "Escape")` |
+| Persistent state | module-scope `let enabled = true` |
+| Transient typed event | `const changed = effect("changed", schema)`, then `changed.emit(payload)` |
+| Keyboard/mouse output | `tapKey`, `keyDown`, `clickMouse`, `moveMouse`, `wheelMouse` |
+| Delay | `sleep.ms(250)`, `sleep.seconds(2)` |
+| Start input + watch + UI | `Spellwire.start(options)` |
+| Overlay layout and content | `ui.row`, `ui.column`, `ui.panel`, `ui.stack`, `ui.text`, `ui.badge`, `ui.divider` |
+| State-bound UI | `overlay: state => ...`, `ui.bind`, `ui.when` |
+| Overlay window | `overlayOptions.window` (`alwaysOnTop`, `transparent`, `focusable`, `clickThrough`) |
+| Electron/sidecar bridge | `SpellwireRpcServer`, `SpellwireRpcClient` |
+
+See the [API reference](docs/api.md) for signatures, defaults, option tables, and platform notes.
+
 ## How it works
 
 - `packages/spellwire` contains the public SDK, the TypeScript AOT compiler, and the `spellwire` CLI. The compiler extracts only the bounded realtime handlers (conditions, loops, arithmetic, helper functions, held-input queries, delays) and writes a versioned binary plus a JSON state manifest. Ordinary Bun code outside those handlers stays unrestricted.
