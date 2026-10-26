@@ -2,75 +2,92 @@
 
 [한국어](README.ko.md)
 
-Spellwire is a stateful realtime input-automation runtime for Bun and TypeScript. Analyzable input handlers are compiled ahead of time into bounded native bytecode instead of invoking JavaScript for every input event.
+Spellwire is a stateful realtime input-automation runtime for Bun and TypeScript: hotkeys, key remaps, and overlay logic are written in TypeScript, compiled ahead of time into bounded native bytecode, and executed by a Rust VM on the input thread instead of calling JavaScript for every event.
 
-> Early alpha. The TypeScript AOT compiler, bounded native VM, lock-free consuming hotkeys/remaps, state gates, non-blocking delay scheduler, Bun FFI host, global platform backends, shared dynamic lane, and retained native overlay are implemented. macOS has live loopback and suppression verification. Windows has interactive-session loopback, injection, reload, and overlay lifecycle verification; physical suppression and visual transparency checks remain. Linux target verification remains.
+**Status:** Early alpha. The compiler, native VM, consuming hotkeys/remaps, state gates, delay scheduler, Bun FFI host, platform backends, and retained overlay are implemented. macOS live loopback and suppression are verified; Windows interactive loopback, injection, reload, and overlay lifecycle are verified, but physical suppression and visual transparency checks remain; Linux target verification remains. No npm release has been published yet.
 
-## Install
+## Features
 
-After the first npm release:
+- Portable hotkey strings (`"Ctrl+Shift+K"`) with consume/pass-through, repeat control, and release triggers
+- Key remaps (`rt.remap("CapsLock", "Escape")`) that emit paired down/up transitions automatically
+- Persistent native state from module-scope integer and boolean `let` declarations
+- `when` gates that switch actions and pass-through on the same condition
+- Typed fixed-payload effects published through a preallocated SPSC lane
+- Keyboard/mouse output (`tapKey`, `keyDown`, `clickMouse`, `moveMouse`, `wheelMouse`) and non-blocking delays (`sleep.ms`, `sleep.seconds`)
+- State-driven, auto-layout native overlay (`ui.row`, `ui.column`, `ui.panel`, `ui.text`, `ui.bind`, `ui.when`) with configurable window policy
+- Authenticated local RPC (`SpellwireRpcServer` / `SpellwireRpcClient`) for Electron or sidecar processes
+- Deterministic inspector/simulator and native dispatch benchmark
+- Watch mode with native hot reload and automatic platform permission setup
+
+## How it works
+
+- `packages/spellwire` contains the public SDK, the TypeScript AOT compiler, and the `spellwire` CLI. The compiler extracts only the bounded realtime handlers (conditions, loops, arithmetic, helper functions, held-input queries, delays) and writes a versioned binary plus a JSON state manifest. Ordinary Bun code outside those handlers stays unrestricted.
+- `crates/spellwire-core` decodes that binary, keeps the trigger table and persistent-state VM, and runs the delay scheduler. It produces fixed output batches without allocating on the hot path.
+- `crates/spellwire-native` exposes a stable C ABI and an owned host that wires global observers and injectors: Windows hooks/`SendInput`, macOS event tap/`CGEventPost`, Linux evdev/uinput.
+- The Bun side loads the native library over FFI, drives watch/reload, and receives only actual state changes and effects over the SPSC lane, so the overlay refreshes on change instead of polling.
+- `crates/spellwire-overlay` is a separate retained renderer process (winit/wgpu) that draws the state-bound UI tree.
+
+## Tech stack
+
+- Runtime/Language: Rust 2021 (MSRV 1.81), TypeScript on Bun 1.4
+- Native: Cargo workspace of five crates; C ABI consumed through Bun FFI
+- Overlay: winit + wgpu renderer process
+- Infra/Tooling: GitHub Actions (`ci.yml`, `publish.yml`), `cargo fmt`/`clippy` with warnings denied, `bun test`, `scripts/check-docs.ts`
+
+## Getting started
+
+### Requirements
+
+- Bun 1.4+
+- Rust toolchain 1.81+ with Cargo
+- Platform input permissions (Accessibility/Input Monitoring on macOS, udev rule in `packaging/linux` on Linux); see [Troubleshooting](docs/troubleshooting.md)
+
+### Install
+
+Once published, the package will be available as `bun add spellwire` or `bun create spellwire my-automation`. From a source checkout:
 
 ```bash
-bun add spellwire
+git clone https://github.com/eunhhu/spellwire.git
+cd spellwire
+bun run setup   # bun install --frozen-lockfile, typecheck, cargo build --release
 ```
 
-Or create a project:
+### Run
+
+Deterministic inspector/simulator (no OS permissions required):
 
 ```bash
-bun create spellwire my-automation
-cd my-automation
-bun run start
+bun run compile:example
+bun run inspect:example
+bun run simulate:example
 ```
 
-The public package includes the TypeScript API, compiler, and `spellwire` CLI. `bun create spellwire` is provided by `create-spellwire`.
-
-Generated projects have three commands:
+Live global input with hot reload from the source checkout:
 
 ```bash
-bun run start  # compile in memory and run
-bun run watch  # run with native hot reload
-bun run build  # write dist/main.spellwire.bin and its manifest
+bun run build:native
+bun packages/spellwire/src/cli.ts watch examples/stateful.spellwire.ts
 ```
 
-`start` and `watch` prepare platform permissions automatically before the native host starts.
+`Ctrl+C` stops the runtime and releases any synthetic inputs that remain held. Other useful scripts:
 
-Generated projects keep realtime handlers and the state-driven modern overlay together in `src/main.ts`. The compiler extracts only bounded handlers for the native VM; unrestricted application/overlay code stays on Bun. `Spellwire.start()` owns both lifecycles without a manual update loop.
+```bash
+bun run check            # typecheck, TS tests, doc checks, cargo fmt/test/clippy
+bun run bench            # native dispatch percentile benchmark
+bun run bench:platform   # platform injector benchmark
+bunx spellwire compile src/main.ts   # compile a single file directly
+```
 
-## API at a glance
-
-| Task | API |
-| --- | --- |
-| Consuming hotkey | `rt.hotkey("Ctrl+Shift+K", handler)` |
-| Key remap | `rt.remap("CapsLock", "Escape")` |
-| Persistent state | module-scope `let enabled = true` |
-| Transient typed event | `const changed = effect("changed", schema)`, then `changed.emit(payload)` |
-| Keyboard/mouse output | `tapKey`, `keyDown`, `clickMouse`, `moveMouse`, `wheelMouse` |
-| Delay | `sleep.ms(250)`, `sleep.seconds(2)`, or unit-specific helpers |
-| Start input + watch + UI | `Spellwire.start(options)` |
-| Overlay layout | `ui.row`, `ui.column`, `ui.panel`, `ui.stack` |
-| Overlay content | `ui.text`, `ui.ellipse`, `ui.dot`, `ui.badge`, `ui.divider` |
-| State-bound UI | `overlay: state => ...`, `ui.bind`, `ui.when` |
-| UI styling | `width`, `height`, `padding`, `gap`, `fill`, `stroke`, `shadow`, `opacity`, font props |
-| Overlay window | `overlayOptions.window` (`alwaysOnTop`, `transparent`, `focusable`, `clickThrough`, …) |
-| Electron/sidecar bridge | `SpellwireRpcServer`, `SpellwireRpcClient` |
-
-See the **[API reference](docs/api.md)** for signatures, defaults, option tables, a complete state-to-overlay application, native window policy, and platform notes.
-
-## Stateful realtime TypeScript
+Example of a stateful handler:
 
 ```ts
 import { Key, rt, tapKey } from "spellwire";
 
 let enabled = true;
-let presses = 0;
 
 rt.hotkey("Ctrl+Shift+K", () => {
-  presses += 1;
   tapKey(Key.Enter);
-}, {
-  repeat: false,
-  when: () => enabled,
-});
+}, { when: () => enabled });
 
 rt.hotkey("F8", () => {
   enabled = !enabled;
@@ -79,121 +96,46 @@ rt.hotkey("F8", () => {
 rt.remap("CapsLock", "Escape", { when: () => enabled });
 ```
 
-Portable strings replace modifier boilerplate, `when` gates action and pass-through together, and remaps emit paired down/up transitions automatically. Module-scope integer and boolean `let` declarations referenced by realtime handlers become persistent native state. Conditions, loops, arithmetic, helper functions, held-input queries, delays, and low-level `rt.onKey*`/`rt.onMouse*` registrations remain available when a larger state machine needs them. Ordinary Bun code outside realtime handlers remains unrestricted control-plane TypeScript.
+## Project structure
 
-State holds the latest value; an effect reports that something happened. Both compile to numeric IDs and fixed `i64` payloads in the native VM. The worker publishes only actual state changes and effects through a preallocated SPSC lane, so the default overlay refreshes on changes instead of polling native state every frame. Local RPC can expose the same state/effects to Electron or a sidecar without putting serialization, sockets, or JavaScript on the input thread. See [Effects and RPC](docs/effects-rpc.md) for the complete API and performance boundaries.
-
-## Build
-
-```bash
-bun run build
+```
+crates/
+  spellwire-core/      bytecode decoder, trigger table, persistent-state VM, scheduler
+  spellwire-native/    C ABI, owned host, global observers, native injectors, platform-bench
+  spellwire-overlay/   retained winit/wgpu overlay renderer process
+  spellwire-cli/       native inspector and deterministic simulator
+  spellwire-bench/     native dispatch percentile benchmark
+packages/
+  spellwire/           public SDK, AOT compiler, TypeScript CLI
+  create-spellwire/    `bun create spellwire` project initializer
+docs/                  English and Korean (.ko.md) documentation
+examples/              sample realtime handlers and overlay programs
+scripts/               doc checks, native staging, platform smoke tests, benchmarks
+packaging/linux/       udev rule for evdev/uinput access
+.github/workflows/     CI and publish pipelines
 ```
 
-The generated project writes `dist/main.spellwire.bin` plus its JSON state manifest. To compile another path directly:
+## Configuration
 
-```bash
-bunx spellwire compile src/main.ts
-```
+Environment variables read by the Bun host:
 
-Direct CLI output defaults next to the input source.
+- `SPELLWIRE_NATIVE_LIBRARY` — path to a prebuilt `spellwire-native` shared library (default: the artifact from `bun run build:native`)
+- `SPELLWIRE_OVERLAY_EXECUTABLE` — path to a prebuilt `spellwire-overlay` binary
 
-## Run locally
-
-A fresh source checkout has a deterministic inspector/simulator:
-
-```bash
-git clone https://github.com/eunhhu/spellwire.git
-cd spellwire
-bun run setup
-bun run compile:example
-bun run inspect:example
-bun run simulate:example
-```
-
-The simulator decodes the same binary format consumed by the C ABI, dispatches named key/mouse events through `spellwire-core`, prints native output batches, and shows persistent state after each event.
-
-For live global input from a source checkout, build once and start watch mode:
-
-```bash
-bun run build:native
-bun packages/spellwire/src/cli.ts watch examples/stateful.spellwire.ts
-```
-
-The CLI checks/requests platform permissions before starting. `Ctrl+C` stops the observer/runtime and releases synthetic inputs that remain held.
-
-[Live Native Host Guide](docs/live-host.md) covers CLI and programmatic examples, safe shutdown, hot-reload state rules, dynamic input events, and error interpretation. Use [Platform Verification](docs/platform-verification.md) when testing a release on another machine.
-
-## What works today
-
-| Capability | Status |
-| --- | --- |
-| TypeScript AOT compiler | Implemented |
-| Persistent integer/boolean state | Implemented |
-| Fixed-payload typed effects and changed-state event lane | Implemented |
-| Conditions, loops, assignments, held checks, helper functions | Implemented |
-| Portable consuming hotkeys, release triggers, state gates, and remaps | Windows/macOS implemented; Linux suppression pending |
-| Native VM, versioned wire format, and fixed output batches | Implemented |
-| Native inspector/simulator | Implemented |
-| C ABI with explicit and owned-host lifecycle APIs | Implemented |
-| Bun FFI host, named state, watch/reload, and SPSC dynamic lane | Implemented |
-| Authenticated local RPC for Electron/sidecars | Implemented |
-| Windows hooks/`SendInput`, macOS event tap/`CGEventPost`, Linux evdev/uinput | Implemented; macOS live-verified; Windows interactive loopback verified; Windows physical suppression and Linux target runs pending |
-| State-driven auto-layout overlay, modern styling, configurable native window policy, retained dirty updates | Implemented; macOS and Windows lifecycle/window-policy smoke verified; Windows visual transparency and Linux compositor checks pending |
-| Cross-platform prebuilt artifact/signing workflow | Implemented; release credentials required |
-| Physical end-to-end latency | Not measured |
-
-## Packages and crates
-
-| Name | Purpose |
-| --- | --- |
-| `spellwire` | Public SDK, embedded compiler, and TypeScript CLI |
-| `create-spellwire` | `bun create spellwire` initializer |
-| `spellwire-core` | Bytecode decoder, trigger table, persistent-state VM, scheduler |
-| `spellwire-native` | Stable C ABI, owned host, global observers, and native injectors |
-| `spellwire-overlay` | Native retained renderer process using winit/wgpu |
-| `spellwire-cli` / `spellwire-sim` | Native inspector and deterministic simulator |
-| `spellwire-bench` | Native dispatch percentile benchmark |
+Runtime behavior (hotkeys, state, overlay window policy such as `alwaysOnTop`, `transparent`, `clickThrough`) is configured in code via `Spellwire.start(options)`; see the [API reference](docs/api.md).
 
 ## Documentation
 
-Start here:
-
-- **[API reference](docs/api.md)** — create/run/build, hotkeys, state, output, lifecycle, overlay API, defaults, and limitations
-- [Quick Start](docs/quick-start.md) — first project and first live run
-- [Troubleshooting](docs/troubleshooting.md) — errors and platform setup
-- [Platform Verification Guide](docs/platform-verification.md) — copyable macOS, Windows, and Linux checks
-
-Optional deep dives:
-
-- [Documentation index](docs/index.md)
+- [API reference](docs/api.md) — create/run/build, hotkeys, state, output, lifecycle, overlay API
+- [Quick Start](docs/quick-start.md) and [Troubleshooting](docs/troubleshooting.md)
+- [Platform Verification](docs/platform-verification.md) — copyable macOS, Windows, and Linux checks
+- [Effects and RPC](docs/effects-rpc.md), [Realtime compiler subset](docs/typescript-runtime.md), [Live native host](docs/live-host.md)
+- [Architecture](docs/architecture.md), [Native C ABI](docs/native-abi.md), [Platforms](docs/platforms.md), [Overlay design](docs/overlay.md)
 - [Automation semantics and AutoHotkey migration](docs/automation.md)
-- [Overlay renderer and performance design](docs/overlay.md)
-- [Effects, state synchronization, and local RPC](docs/effects-rpc.md)
-- [Realtime compiler subset](docs/typescript-runtime.md)
-- [Live native host internals](docs/live-host.md)
-- [Architecture](docs/architecture.md), [Native C ABI](docs/native-abi.md), and [Platforms](docs/platforms.md)
-- [Publishing](docs/publishing.md), [Implementation status](docs/status.md), and [Verification](docs/runtime-verification.md)
+- [Publishing](docs/publishing.md), [Implementation status](docs/status.md), [Verification](docs/runtime-verification.md), [Documentation index](docs/index.md)
 
-## Development
-
-```bash
-bun install --frozen-lockfile
-bun run check
-cargo build --workspace --release --locked
-```
-
-`bun run check` includes TypeScript tests, Rust tests, formatting, and Clippy with warnings denied.
-
-Run the native core benchmark:
-
-```bash
-bun run bench
-bun run bench -- 1000000 --effect
-bun run bench:platform -- 10000
-```
-
-Spellwire separates framework-boundary latency from switch debounce, USB polling, OS scheduling, compositor behavior, and target-application polling. Performance claims require platform-specific percentile and jitter measurements.
+Performance note: Spellwire separates framework-boundary latency from switch debounce, USB polling, OS scheduling, compositor behavior, and target-application polling. Physical end-to-end latency has not been measured; claims require platform-specific percentile and jitter measurements.
 
 ## License
 
-MIT
+[MIT](LICENSE)
